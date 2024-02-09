@@ -3,7 +3,9 @@
 pragma solidity ^0.8.18;
 
 import {DecentralizedStableCoin}from"./DecentralizedStableCoin.sol";
-import {ReentrancyGuard}from"@openzeppelin/contracts/security/ReentrancyGuard.sol";
+//import {ReentrancyGuard}from"@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {IERC20}from"@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AggregatorV3Interface}from"@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 /**
  * @title DSCEngine
  * @author Marin Dimitrov
@@ -23,21 +25,33 @@ import {ReentrancyGuard}from"@openzeppelin/contracts/security/ReentrancyGuard.so
  * and redeeming DSC, as well as depositing & withdrawing collateral.
  * @notice  This contract is VERY loosely based on the MakerDAO DSS (DAI) system.
  */
-contract DSCEngine is ReentrancyGuard{
+contract DSCEngine {
   ///////////////
   // Errors    //  
   /////////////// 
  error DSCEngine__NeedsMoreThanZero();
  error DSCEngine__TokenAddresessAndPriceFeedAddressesMustBeSameLength();
  error DSCEngine__NotAllowedToken();
+ error DSCEngine__TransferFailed();
 
   /////////////////////
   // State Variables //  
   ///////////////////// 
+  uint256 private constant ADDITIONAL_FEED_PRECISION=10;
+  uint256 private constant PRECISION=1e18;
   mapping(address token=>address priceFeed)private s_priceFeeds;//tokenToPriceFeed
   mapping(address user=>mapping(address token=>uint256 amount))
   private s_collateralDeposited;
   DecentralizedStableCoin private immutable i_dsc;
+  mapping (address user=>uint256 amountDscMinted)private s_DSCMinted;
+  address[]private s_collateralTokens;
+ /////////////////////
+  // Events //  
+  ///////////////////// 
+
+ event CollateralDeposited(address indexed user,address indexed token,uint256 indexed amount);
+  
+ 
    ///////////////
   // Modifiers //  
   /////////////// 
@@ -67,6 +81,7 @@ contract DSCEngine is ReentrancyGuard{
      }
      for(uint256 i=0;i<tokenAddresses.length;i++){
         s_priceFeeds[tokenAddresses[i]]=priceFeedAddresses[i];
+        s_collateralTokens.push(tokenAddresses[i]);
      }
      i_dsc=DecentralizedStableCoin(dscAddress);
   }
@@ -76,7 +91,7 @@ contract DSCEngine is ReentrancyGuard{
   ////////////////////////
   function depositColleteralAndMintDsc() external{}
   /*
-   * 
+   * @notice follows CEI
    * @param tokenCollateralAddress The address of the token to deposit as collateral
    * @param amountCollateral The amount of collateral to deposit
    */
@@ -85,8 +100,13 @@ contract DSCEngine is ReentrancyGuard{
     uint256 amountCollateral)external 
     moreThanZero(amountCollateral) 
     isAllowedToken(tokenCollateralAddress)
-    nonReentrant{
+    {
        s_collateralDeposited[msg.sender][tokenCollateralAddress]+=amountCollateral;
+       emit CollateralDeposited(msg.sender,tokenCollateralAddress,amountCollateral);
+       bool success=IERC20(tokenCollateralAddress).transferFrom(msg.sender,address(this),amountCollateral);
+       if(!success){
+         revert DSCEngine__TransferFailed();
+       }
     }
 
 
@@ -94,7 +114,15 @@ contract DSCEngine is ReentrancyGuard{
 
   }
   function redeemCollateral()external{}
-  function mintDsc()external{}
+  /*
+   * @notice follows CEI
+   * @param amountDscToMint The amount of dsc to mint
+   * @notice they must have more colateral value than the minimum threshold
+   */
+  function mintDsc(uint256 amountDscToMint)external moreThanZero(amountDscToMint){
+      s_DSCMinted[msg.sender]+=amountDscToMint;
+      _revertIfhealthFactorIsBroken(msg.sender);
+  }
   function burnDsc()external {
   }
   function liquidate()external{
@@ -104,4 +132,46 @@ contract DSCEngine is ReentrancyGuard{
 
   }
 
+  /////////////////////////////////////////
+  // Private and Internal View Functions //
+  /////////////////////////////////////////
+
+  /*
+   * Returns how close to liquidation a user is
+   * @param user 
+   * If a user goes below 1, then they can get liquidated
+   */
+
+  function _getAccountInformation(address user)
+  private
+   view 
+   returns(uint256 totalDscMinted,uint256 collateralValueInUsd){
+    totalDscMinted=s_DSCMinted[user];
+    collateralValueInUsd=getAccountCollateralValue(user);
+   }
+  function _healthFactor(address user)private view returns (uint256){
+    (uint256 totalDscMinted,uint256 collatearlValueInUsd)=_getAccountInformation(user);
+  }
+
+  function _revertIfhealthFactorIsBroken(address user)internal view{
+
+  }
+  /////////////////////////////////////
+  // Public & External View Function //
+  /////////////////////////////////////
+
+  function getAccountCollateralValue(address user)public view returns(uint256 totalCollateralValueInUsd ){
+    
+    for(uint256 i=0;i<s_collateralTokens.length;i++){
+        address token =s_collateralTokens[i];
+        uint256 amount=s_collateralDeposited[user][token];
+        totalCollateralValueInUsd+=getUsdValue(token,amount);
+    }
+    return totalCollateralValueInUsd;
+  }
+  function getUsdValue(address token,uint256 amount)public view returns(uint256){
+    AggregatorV3Interface priceFeed=AggregatorV3Interface(s_priceFeeds[token]);
+    (,int256 price,,,)=priceFeed.latestRoundData();
+    return ((uint256(price)*ADDITIONAL_FEED_PRECISION)*amount)/PRECISION;
+  }
 }

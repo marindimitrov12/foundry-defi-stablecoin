@@ -35,6 +35,7 @@ contract DSCEngine {
  error DSCEngine__TransferFailed();
  error DSCEngine__BreaksHealthFactor(uint256 healthFactor);
  error DSCEngine__MintFailed();
+ error DSCEngine__HealthFactorOk();
 
   /////////////////////
   // State Variables //  
@@ -43,7 +44,8 @@ contract DSCEngine {
   uint256 private constant PRECISION=1e18;
   uint256 private constant LIQUIDATION_THRESHOLD=50;
   uint256 private constant LIQUIDATION_PRICISION=100;
-  uint256 private constant MIN_HEALT_FACTOR=1;
+  uint256 private constant MIN_HEALT_FACTOR=1e18;
+  uint256 private constant LIQUIDATION_BONUS=10//this means 10% bonus
 
   mapping(address token=>address priceFeed)private s_priceFeeds;//tokenToPriceFeed
   mapping(address user=>mapping(address token=>uint256 amount))
@@ -57,7 +59,7 @@ contract DSCEngine {
 
  event CollateralDeposited(address indexed user,address indexed token,uint256 indexed amount);
  event CollateralRedeemed(address indexed user,uint256 indexed amountCollateral,address indexed tokenCollateralAddress);
- 
+
    ///////////////
   // Modifiers //  
   /////////////// 
@@ -184,8 +186,34 @@ contract DSCEngine {
     i_dsc.burn(amount);
     _revertIfhealthFactorIsBroken(msg.sender);
   }
-  function liquidate()external{
 
+  //if someone is almost undercollateralized, we will pay you to liquidate them!
+  /**
+   * 
+   * @param collateral The erc20 collateral address to liquidate from the user.
+   * @param user The user who has broken the health factor.Their _healthFactor should be below MIN_HEALTH_FACTOR.
+   * @param debtToCover The amount of debt you want to burn to improve the users health factor.
+   * @notice You can partially liquidate a user.
+   * @notice You will get a liquidation bonus for taking users funds.
+   * @notice This function assumes the protocol will be roughly 200%
+     over collateralized in order for this to work.
+     Follows CEI:Checks,Effects,Interactions
+   */
+  function liquidate(address collateral,address user,uint256 debtToCover)
+  external moreThanZero(debtToCover){
+    //need to check the health factor of the user.
+    uint256 startingUserHealthFactor=_healthFactor(user);
+    if(startingUserHealthFactor>=MIN_HEALT_FACTOR){
+       revert DSCEngine__HealthFactorOk();
+    }
+    //we want to burn their DSC "debt"
+    //and take their collateral
+    uint256 tokenAmountOfDebtCovered=getTokenAmountFromUsd(collateral,debtToCover);
+    //And give them 10% bonus
+    //So we are giving the liquidator $110 of WETH for 100 DSC
+    uint256 bonusCollateral=(tokenAmountFromDebtCovered*LIQUIDATION_BONUS)/LIQUIDATION_PRICISION;
+    uint256 totalCollateralToRedeem=tokenAmountFromDebtCovered+bonusCollateral;
+        
   }
   function getHealthFactor()external view{
     
@@ -226,6 +254,13 @@ contract DSCEngine {
   /////////////////////////////////////
   // Public & External View Function //
   /////////////////////////////////////
+
+  function getTokenAmountFromUsd(address token,uint256 usdAmountInWei)public view returns(uint256){
+
+     AggregatorV3Interface priceFeed=AggregatorV3Interface(s_priceFeeds[token]);
+     (,int256 price,,,)=priceFeed.latestRoundData();
+     return(usdAmountInWei*PRECISION)/(uint256(price)*ADDITIONAL_FEED_PRECISION);
+  }
 
   function getAccountCollateralValue(address user)public view returns(uint256 totalCollateralValueInUsd ){
     

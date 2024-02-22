@@ -34,6 +34,7 @@ contract DSCEngine {
  error DSCEngine__NotAllowedToken();
  error DSCEngine__TransferFailed();
  error DSCEngine__BreaksHealthFactor(uint256 healthFactor);
+ error DSCEngine__MintFailed();
 
   /////////////////////
   // State Variables //  
@@ -127,6 +128,10 @@ contract DSCEngine {
   function mintDsc(uint256 amountDscToMint)external moreThanZero(amountDscToMint){
       s_DSCMinted[msg.sender]+=amountDscToMint;
       _revertIfhealthFactorIsBroken(msg.sender);
+      bool minted=i_dsc.mint(msg.sender,amountDscToMint);
+      if(!minted){
+          revert DSCEngine__MintFailed();
+      }
   }
   function burnDsc()external {
   }

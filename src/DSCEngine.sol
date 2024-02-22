@@ -33,12 +33,17 @@ contract DSCEngine {
  error DSCEngine__TokenAddresessAndPriceFeedAddressesMustBeSameLength();
  error DSCEngine__NotAllowedToken();
  error DSCEngine__TransferFailed();
+ error DSCEngine__BreaksHealthFactor(uint256 healthFactor);
 
   /////////////////////
   // State Variables //  
   ///////////////////// 
   uint256 private constant ADDITIONAL_FEED_PRECISION=10;
   uint256 private constant PRECISION=1e18;
+  uint256 private constant LIQUIDATION_THRESHOLD=50;
+  uint256 private constant LIQUIDATION_PRICISION=100;
+  uint256 private constant MIN_HEALT_FACTOR=1;
+
   mapping(address token=>address priceFeed)private s_priceFeeds;//tokenToPriceFeed
   mapping(address user=>mapping(address token=>uint256 amount))
   private s_collateralDeposited;
@@ -129,6 +134,8 @@ contract DSCEngine {
 
   }
   function getHealthFactor()external view{
+    
+
 
   }
 
@@ -151,9 +158,15 @@ contract DSCEngine {
    }
   function _healthFactor(address user)private view returns (uint256){
     (uint256 totalDscMinted,uint256 collatearlValueInUsd)=_getAccountInformation(user);
+    uint256 collateralAdjustedForThreshold=(collatearlValueInUsd*LIQUIDATION_THRESHOLD)/LIQUIDATION_PRICISION;
+    return  (collateralAdjustedForThreshold*PRECISION/totalDscMinted); 
   }
 
   function _revertIfhealthFactorIsBroken(address user)internal view{
+    uint256 userHealthFactor=_healthFactor(user);
+    if(userHealthFactor<MIN_HEALT_FACTOR){
+       revert DSCEngine__BreaksHealthFactor(userHealthFactor);
+    }
 
   } 
   /////////////////////////////////////

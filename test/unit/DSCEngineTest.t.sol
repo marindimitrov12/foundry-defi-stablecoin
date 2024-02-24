@@ -526,7 +526,7 @@ contract DSCEngineTest is StdCheats, Test {
     }
 
     function testGetCollateralBalanceOfUser() public {
-        vm.startPrank(user);
+        vm.startPrank(user); 
         ERC20Mock(weth).approve(address(dsce), amountCollateral);
         dsce.depositCollateral(weth, amountCollateral);
         vm.stopPrank();
